@@ -1,0 +1,289 @@
+/* Program: Data logguer Pzem solar energy
+    Author: Alfonso Mella Lijó
+    Hardware Connections / Pin Usage
+    Arduino Mega 2560 Card
+
+    Serial / USB connection, standard for PC communication (programming, control, etc.)
+    SD - Communicates over SPI
+    MOSI -> pin 51
+    MISO -> pin 50
+    SCK -> pin 52
+    CS (SS) -> Pin 53
+
+    RTC Clock DS1307 - Communicates over I2C at Address 0x68
+    SDA -> pin 20
+    SCL -> pin 21
+
+    LCD communicates over IC2 at address 0x27
+    SDA -> pin 20
+    SCL -> pin 21
+
+    Pzem 004 data collection
+    Communication Pins with Pzem (Serial3)
+    Pin 14 TX Green Wire for PZEM RX
+    PZEM Pin 15 RX White Wire Area TX
+
+*/
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
+#include <SdFat.h>
+SdFat SD;
+const int CS_SD = 53;
+#include <DS1307RTC.h>
+#include <PZEM004Tv30.h>
+PZEM004Tv30 pzem(&Serial3);
+
+// Constantes variadas
+
+const unsigned long intervaloLeitura = 2000;      // read range [milliseconds]
+const unsigned long intervaloEscritaSD = 300;     // SD data write interval [milliseconds]
+boolean temSD = 0;        // Variable to indicate SD card presence
+const int intervaloSincro = 300; // Arduino sync interval with RTC [Sec]. RTC Timing
+//----------------------------------------------------------------------------------------------------------------
+
+void setup()
+{
+  lcd.begin (20, 4);
+  Serial.begin(115200);
+
+// Initialize SD card
+// check if SD is present and can be initialized:
+   if (!SD.begin(CS_SD)) {
+    temSD = 0;  //SD card not detected
+    Serial.print("SD card not detected");
+    Serial.println();
+  }
+  else {
+    temSD = 1;  //SD card found
+    Serial.print("SD card found");
+    Serial.println();
+  }
+  //Initialize the RTC and time count
+  setTime(RTC.get());
+  setSyncProvider(RTC.get); //We established RTC as a time provider
+  setSyncInterval(intervaloSincro); // We update following defined interval
+}
+
+void loop() {
+  //we start with PZEM data readings
+  float voltage = pzem.voltage();
+  if (voltage != NAN) {
+    Serial.print("Voltage: "); Serial.print(voltage); Serial.println("V");
+  } else {
+    Serial.println("Error reading voltage");
+  }
+
+  float current = pzem.current();
+  if (current != NAN) {
+    Serial.print("Current: "); Serial.print(current); Serial.println("A");
+  } else {
+    Serial.println("Error reading current");
+  }
+
+  float power = pzem.power();
+  if (current != NAN) {
+    Serial.print("Power: "); Serial.print(power); Serial.println("W");
+  } else {
+    Serial.println("Error reading power");
+  }
+
+  float energy = pzem.energy();
+  if (current != NAN) {
+    Serial.print("Energy: "); Serial.print(energy, 3); Serial.println("kWh");
+  } else {
+    Serial.println("Error reading energy");
+  }
+
+  float frequency = pzem.frequency();
+  if (current != NAN) {
+    Serial.print("Frequency: "); Serial.print(frequency, 1); Serial.println("Hz");
+  } else {
+    Serial.println("Error reading frequency");
+  }
+
+  float pf = pzem.pf();
+  if (current != NAN) {
+    Serial.print("PF: "); Serial.println(pf);
+  } else {
+    Serial.println("Error reading power factor");
+  }
+  
+  static unsigned long millisPrevio = intervaloLeitura;
+  static unsigned long millisPrevio2 = intervaloEscritaSD;
+  static String dados;
+  unsigned long millisActual = millis();
+
+  // We send Pzem time and reading data to the LCD every 15 seconds
+
+  lcd.clear();
+  lcd.setBacklight(HIGH);
+  lcd.setCursor(0, 0);
+  lcd.print("Usina AlfonsoLijo");
+  lcd.setCursor(0, 1);
+  lcd.print("Capacidade 2.9 kWp");
+  lcd.setCursor(0, 2);
+  lcd.print ("Data:");
+  lcd.setCursor(6, 2);
+  lcd.print(timeLabel1()); //funciona
+  lcd.setCursor(0, 3);
+  lcd.print("Hora:");
+  lcd.setCursor(6, 3);
+  lcd.print(timeLabel2());
+  delay(15000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(voltage);
+  lcd.setCursor(7, 0);
+  lcd.print("V");
+  lcd.setCursor(10, 0);
+  lcd.print(current);
+  lcd.setCursor(17, 0);
+  lcd.print("A");
+  lcd.setCursor(0, 1);
+  lcd.print(power);
+  lcd.setCursor(17, 1);
+  lcd.print("kW");
+  lcd.setCursor(0, 2);
+  lcd.print(energy);
+  lcd.setCursor(17, 2);
+  lcd.print("kWh");
+  lcd.setCursor(0, 3);
+  lcd.print(frequency);
+  lcd.setCursor(7, 3);
+  lcd.print("Hz");
+  lcd.setCursor(10, 3);
+  lcd.print(pf);
+  lcd.setCursor(17, 3);
+  lcd.print("PF");
+  delay(15000);
+  
+
+  if (millisActual - millisPrevio >= intervaloLeitura) { //Performs the following actions only if the interval is met
+
+    dados = timeLabel();           // place the timestamp in the data string
+    dados = dados + ", " + String(voltage);  //will add the measured values in the string
+    dados = dados + ", " + String(current);
+    dados = dados + ", " + String(power);
+    dados = dados + ", " + String(energy);
+    dados = dados + ", " + String(frequency);
+    dados = dados + ", " + String(pf);
+    Serial.println(dados);            //show result on serial port for simple viewing
+
+    millisPrevio = millisActual;
+  }
+
+  if (millisActual - millisPrevio2 >= intervaloEscritaSD * 60UL) { //if the specified interval is met, data will be saved
+    if (gravardadosSD(dados)) {   //write data to SD - if error returns 1
+    }
+    millisPrevio2 = millisActual;
+  }
+}
+
+// function that returns a String with the current Time / Date
+// Add a leading '0' to the values of one decimal place and format the time / date
+
+String timeLabel() {
+  time_t t = now();
+  String tempoAtual = String();
+  tempoAtual = year(t);
+  if (month(t) < 10)
+    tempoAtual = String(tempoAtual + '-' + '0' + month(t));
+  else
+    tempoAtual = String(tempoAtual + '-' + month(t));
+  if (day(t) < 10)
+    tempoAtual = String(tempoAtual + '-' + '0' + day(t));
+  else
+    tempoAtual = String(tempoAtual + '-' + day(t));
+  tempoAtual = String(tempoAtual + ',');
+  if (hour(t) < 10)
+    tempoAtual = String(tempoAtual + '0' + hour(t));
+  else
+    tempoAtual = String(tempoAtual + hour(t));
+  tempoAtual = String(tempoAtual + ':');
+  if (minute(t) < 10)
+    tempoAtual = String(tempoAtual + '0' + minute(t) + ':');
+  else
+    tempoAtual = String(tempoAtual + minute(t) + ':');
+  if (second(t) < 10)
+    tempoAtual = String(tempoAtual + '0' + second(t));
+  else
+    tempoAtual = String(tempoAtual + second(t));
+  return tempoAtual;
+}
+
+String timeLabel1() {
+  time_t t = now();
+  String tempoAtual1 = String();
+  tempoAtual1 = String(tempoAtual1 + day(t) + '-');
+  tempoAtual1 = String(tempoAtual1 + month(t) + '-');
+  tempoAtual1 = String(tempoAtual1 + year(t));
+  return tempoAtual1;
+}
+
+String timeLabel2() {
+  time_t t = now();
+  String tempoAtual2 = String();
+  if (hour(t) < 10)
+    tempoAtual2 = String(tempoAtual2 + '0' + hour(t));
+  else
+    tempoAtual2 = String(tempoAtual2 + hour(t));
+  tempoAtual2 = String(tempoAtual2 + ':');
+  if (minute(t) < 10)
+    tempoAtual2 = String(tempoAtual2 + '0' + minute(t) + ':');
+  else
+    tempoAtual2 = String(tempoAtual2 + minute(t));
+//  if (second(t) < 10)
+//    tempoAtual2 = String(tempoAtual2 + '0' + second(t));
+//  else
+//    tempoAtual2 = String(tempoAtual2 + second(t));
+  return tempoAtual2;
+}
+
+// Function that records measurements made in a "meulog.cvs" file
+// If the file exists, the data is added and if not created it
+// Get a String with the format to be written
+// Returns 0 if it went well and 1 if there was an error
+
+boolean gravardadosSD(String data) {
+  time_t t = now();
+  String date = String(); //We generate a filename string to use with the date of the day.
+  date = year(t);
+  if (month(t) < 10)
+    date = String(date + '0' + month(t));
+  else
+    date = String(date + month(t));
+  if (day(t) < 10)
+    date = String(date + '0' + day(t));
+  else
+    date = String(date + day(t));
+  date = String(date + ".csv");
+  char fileName[13];
+  date.toCharArray(fileName, 13); //we convert the string to a character array (required by SD library)
+
+  if (!temSD) {
+    return 1;                 //terminates function if SD is not initialized
+  }
+  if (SD.exists(fileName)) { //If there is the file "fileName" we open it and add the data.
+    File meulog = SD.open(fileName, FILE_WRITE);
+    if (meulog) {           //If the file opens correctly write it ...
+      meulog.println(data);
+      meulog.close();
+      return 0;
+    }
+    else {
+      return 1;   //Could not open file ...
+    }
+  }
+  else {                      //if there is no file "meulog.cvs" we create a new one and save the data ...
+    File meulog = SD.open(fileName, FILE_WRITE);
+    if (meulog) {           //If the file is opened correctly we write the data ...
+      meulog.println(F("Data, Hora, Volt, Amp, Watt, kWh, Hz, FP"));
+      meulog.println(data);
+      meulog.close();
+      return 0;
+    }
+    else {
+      return 1;
+    }
+  }
+}
